@@ -1,0 +1,152 @@
+---
+heat_template_version: 2017-09-01
+
+description: >
+  This template will create a simples Nova instance, configure the Neutron
+  security group and network for it and set the DNS.
+
+parameters:
+  availability_zone:
+    type: string
+    description: The Availability Zone to create the volume.
+    default: nova
+  flavor:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used.
+    constraints:
+      - custom_constraint: nova.flavor
+  image_id:
+    type: string
+    label: Image ID
+    description: Image to be used for compute instance.
+    constraints:
+      - custom_constraint: glance.image
+  key_name:
+    type: string
+    label: Key Name
+    description: Name of key-pair to be used for compute instance.
+    constraints:
+      - custom_constraint: nova.keypair
+  server_data:
+    type: json
+    label: Metadata
+    description: Metadata for the VM.
+  name:
+    type: string
+    label: Instance name
+    description: The compute instance name
+  project:
+    type: string
+    label: Project Name
+    description: The openstack project the instance is associated with
+  domain:
+    type: string
+    label: Domain name
+    description: Domain Name
+  private_network:
+    type: string
+    description: The private network for the VM.
+    constraints:
+      - custom_constraint: neutron.network
+  public_network:
+    type: string
+    description: The public network for the VM.
+    constraints:
+      - custom_constraint: neutron.network
+
+resources:
+  instance_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: security-group-keepass
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 6000
+          port_range_max: 6000
+        - protocol: icmp
+          remote_ip_prefix: 0.0.0.0/0
+
+  instance_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_network }
+      security_groups: [{ get_resource: instance_security_group }]
+
+  instance_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: public_network }
+
+  instance_associate_floating_ip:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: instance_floating_ip }
+      port_id: { get_resource: instance_port }
+
+  instance_compute:
+    type: OS::Nova::Server
+    properties:
+      image:    { get_param: image_id }
+      flavor:   { get_param: flavor }
+      key_name: { get_param: key_name }
+      metadata: { get_param: server_data }
+      name:     { get_param: name }
+      networks:
+        - port: { get_resource: instance_port }
+      user_data_format: RAW
+      user_data:
+        get_resource: instance_userdata
+
+  instance_userdata:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: { get_resource: instance_hostname_config }
+
+  instance_hostname_config:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        fqdn:
+          str_replace:
+            template: $name.$project.$domain
+            params:
+              "$name": { get_param: name }
+              "$project": { str_split: ['_', { get_param: project }, 0]}
+              "$domain": { get_param: domain }
+        preserve_hostname: false
+        manage_etc_hosts: true
+
+  instance_dns_record:
+    type: OS::Designate::RecordSet
+    properties:
+      zone:
+        str_replace:
+          template: $project.$domain.
+          params:
+            "$project": { str_split: ['_', { get_param: project }, 0]}
+            "$domain": { get_param: domain }
+      records: [{ get_attr: [instance_floating_ip, floating_ip_address] }]
+      name:
+        str_replace:
+          template: $name.$project.$domain.
+          params:
+            "$name": { get_param: name }
+            "$project": { str_split: ['_', { get_param: project }, 0]}
+            "$domain": { get_param: domain }
+      type: A
+
+outputs:
+  private_ip:
+    description: IP address of instance in private network
+    value: { get_attr: [ instance_compute, first_address ] }
+  public_ip:
+    description: Floating IP address of instance in public network
+    value: { get_attr: [ instance_floating_ip, floating_ip_address ] }

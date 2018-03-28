@@ -1,0 +1,11 @@
+---
+resource_registry:
+  OS::Pic::Server: instance_with_volume.yaml
+  OS::Pic::ServerSmall: instance.yaml
+
+parameters:
+  jenkins_master_group_size: 1
+  jenkins_slave_group_size: 1
+  jenkins_master_metadata: '{"group": "jenkins_masters"}'
+  jenkins_slave_metadata: '{"group": "jenkins_slaves"}'
+  keepass_metadata: '{"group": "keepass"}'

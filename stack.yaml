@@ -1,0 +1,183 @@
+---
+heat_template_version: 2017-09-01
+
+description: Create a stack for Jenkins masters and slaves.
+
+parameters:
+  flavor:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used.
+    default: Standard_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  image_id:
+    type: string
+    label: Image ID
+    description: Image to be used for compute instance.
+    constraints:
+      - custom_constraint: glance.image
+  key_name:
+    type: string
+    label: Key Name
+    description: Name of key-pair to be used for compute instance.
+    default: admsrv
+    constraints:
+      - custom_constraint: nova.keypair
+  public_network:
+    type: string
+    description: The network for the VM.
+    default: external
+    constraints:
+      - custom_constraint: neutron.network
+  nameservers:
+    type: comma_delimited_list
+    description: The DNS the VM is going to use.
+    default: [ '172.16.8.254' ]
+  volume_size:
+    type: number
+    description: Size of the attached volume.
+    default: 50
+  project:
+    type: string
+    label: Project Name
+    description: The openstack project the instance is associated with
+  domain:
+    type: string
+    label: Domain name
+    description: Domain Name
+    default: vms.dune
+
+  jenkins_group_name:
+    type: string
+    description: Stack name in Nova / Horizon
+    default: jenkins
+  jenkins_master_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the master VMs.
+  jenkins_slave_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the slave VMs.
+  jenkins_master_group_size:
+    type: number
+    label: Master group size
+    description: Define the number of master servers in the group.
+    default: 1
+  jenkins_slave_group_size:
+    type: number
+    label: Slave group size
+    description: Define the number of slave servers in the group.
+    default: 1
+  keepass_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the keepass VMs
+
+  private_net_name:
+    type: string
+    description: Name of private network to be created
+    default: pic_private_network
+  private_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 10.0.69.0/29
+  private_net_gateway:
+    type: string
+    description: Private network gateway address
+    default: 10.0.69.1
+  private_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 10.0.69.2
+  private_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 10.0.69.6
+
+resources:
+  stack_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name }
+
+  stack_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: stack_private_net }
+      cidr: { get_param: private_net_cidr }
+      gateway_ip: { get_param: private_net_gateway }
+      dns_nameservers: { get_param: nameservers }
+
+      allocation_pools:
+        - start: { get_param: private_net_pool_start }
+          end: { get_param: private_net_pool_end }
+
+  stack_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_network }
+
+  stack_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: stack_router }
+      subnet_id: { get_resource: stack_private_subnet }
+
+  jenkins_master_group:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: jenkins_master_group_size }
+      resource_def:
+        type: OS::Pic::Server
+        properties:
+          name: jenkins-master-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image_id }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          volume_size: { get_param: volume_size }
+          server_data: { get_param: jenkins_master_metadata }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  jenkins_slave_group:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: jenkins_slave_group_size }
+      resource_def:
+        type: OS::Pic::Server
+        properties:
+          name: jenkins-slave-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image_id }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          volume_size: { get_param: volume_size }
+          server_data: { get_param: jenkins_slave_metadata }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  keepass:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: 1
+      resource_def:
+        type: OS::Pic::ServerSmall
+        properties:
+          name: keepass-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image_id }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: keepass_metadata }
+          project: { get_param: project }
+          domain: { get_param: domain }
