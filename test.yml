@@ -1,0 +1,222 @@
+heat_template_version: 2017-09-01
+
+description: >
+  HOT template to create a new neutron network plus a router to the public
+  network, and for deploying two servers into the new network. The template also
+  assigns floating IP addresses to each server so they are routable from the
+  public network.
+
+parameters:
+  availability_zone:
+    type: string
+    description: The Availability Zone to create the volume.
+    default: nova
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  volume_size_gd:
+    type: string
+    default: 100
+  volume_size_pt:
+    type: string
+    default: 30
+  external:
+    type: string
+    description: >
+      ID or name of public network for which floating IP addresses will be allocated
+  hypadmin_net_gateway:
+    type: string
+  public_net_name:
+    type: string
+  public_net_cidr:
+    type: string
+  # INTERNAL
+  internal_net_name:
+    type: string
+  internal_net_cidr:
+    type: string
+  # FLOATING
+  floating_net_name:
+    type: string
+  floating_net_cidr:
+    type: string
+  # CEPH PUBLIQUE
+  ceph_publique_net_name:
+    type: string
+  ceph_publique_net_cidr:
+    type: string
+  # CEPH CLUSTER
+  ceph_cluster_net_name:
+    type: string
+  ceph_cluster_net_cidr:
+    type: string
+  # HYPADMIN
+  hypadmin_net_name:
+    type: string
+  hypadmin_net_cidr:
+    type: string
+
+#######################################################################
+#					CONFIGURATION DES RESEAUX
+#######################################################################
+resources:
+  public_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: public_net_name }
+
+  public_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: public_net }
+      cidr: { get_param: public_net_cidr }
+      gateway_ip:
+
+  hypadmin_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: hypadmin_net_name }
+
+  hypadmin_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      cidr: { get_param: hypadmin_net_cidr }
+      gateway_ip: { get_param: hypadmin_net_gateway }
+      network_id: { get_resource: hypadmin_net }
+      dns_nameservers: [ "172.16.6.254" ]
+
+  floating_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: floating_net_name }
+
+  floating_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: floating_subnet
+      network_id: { get_resource: floating_net }
+      cidr: { get_param: floating_net_cidr }
+      gateway_ip:
+
+#############################################################################
+#				CONFIGURATION DU ROUTAGE
+#############################################################################
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external }
+
+  router_interface_hypadmin:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: hypadmin_subnet }
+
+############################################################################
+#				CREATION DU BASTION
+############################################################################
+  bastion:
+    type: OS::Nova::Server
+    properties:
+      count: 2
+      name: bastion
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: bastion_port_hypadmin }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+####################################################################################
+#				CONFIGURATION DU DES VOLUMES
+####################################################################################
+
+  instance_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: security-group-custom
+      rules:
+        - protocol: udp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: icmp
+          remote_ip_prefix: 0.0.0.0/0
+
+  instance_volume:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: availability_zone }
+      size: { get_param: volume_size_gd }
+
+  instance_volume_attach:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: { get_resource: bastion }
+      volume_id: { get_resource: instance_volume }
+      mountpoint: /dev/sdb
+
+####################################################################################
+#				CONFIGURATION DU BASTION
+####################################################################################
+  bastion_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: public_net }
+      fixed_ips:
+        - subnet: { get_resource: public_subnet }
+          ip_address: 10.0.5.%index%
+      security_groups: [{ get_resource: instance_security_group }]
+
+  bastion_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.10
+      security_groups: [{ get_resource: instance_security_group }]
+
+  bastion_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.10
+      security_groups: [{ get_resource: instance_security_group }]
+
+  bastion_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external }
+      port_id: { get_resource: bastion_port_hypadmin }
+
+outputs:
+  bastion_private_ip:
+    description: IP address of bastion in private network
+    value: { get_attr: [ bastion, first_address ] }
+  bastion_public_ip:
+    description: Floating IP address of bastion in public network
+    value: { get_attr: [ bastion_floating_ip, floating_ip_address ] }
+

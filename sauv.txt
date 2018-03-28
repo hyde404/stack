@@ -1,0 +1,753 @@
+heat_template_version: 2017-09-01
+
+description: >
+  HOT template to create a new neutron network plus a router to the public
+  network, and for deploying two servers into the new network. The template also
+  assigns floating IP addresses to each server so they are routable from the
+  public network.
+
+parameters:
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external:
+    type: string
+    description: >
+      ID or name of public network for which floating IP addresses will be allocated
+  hypadmin_net_gateway:
+    type: string
+  public_net_name:
+    type: string
+  public_net_cidr:
+    type: string
+  # INTERNAL
+  internal_net_name:
+    type: string
+  internal_net_cidr:
+    type: string
+  # FLOATING
+  floating_net_name:
+    type: string
+  floating_net_cidr:
+    type: string
+  # CEPH PUBLIQUE
+  ceph_publique_net_name:
+    type: string
+  ceph_publique_net_cidr:
+    type: string
+  # CEPH CLUSTER
+  ceph_cluster_net_name:
+    type: string
+  ceph_cluster_net_cidr:
+    type: string
+  # HYPADMIN
+  hypadmin_net_name:
+    type: string
+  hypadmin_net_cidr:
+    type: string
+
+#######################################################################
+#					CONFIGURATION DES RESEAUX
+#######################################################################
+resources:
+  public_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: public_net_name }
+
+  public_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: public_net }
+      cidr: { get_param: public_net_cidr }
+      gateway_ip:
+
+  internal_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: internal_net_name }
+
+  internal_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: internal_net }
+      cidr: { get_param: internal_net_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip:
+
+  hypadmin_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: hypadmin_net_name }
+
+  hypadmin_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: hypadmin_net }
+      cidr: { get_param: hypadmin_net_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip: { get_param: hypadmin_net_gateway }
+
+  floating_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: floating_net_name }
+
+  floating_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: floating_net }
+      cidr: { get_param: floating_net_cidr }
+      gateway_ip: 
+      dns_nameservers: [ "172.16.6.254" ]
+
+  ceph_publique_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: ceph_publique_net_name }
+
+  ceph_publique_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: ceph_publique_net }
+      cidr: { get_param: ceph_publique_net_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip:
+
+  ceph_cluster_net:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: ceph_cluster_net_name }
+
+  ceph_cluster_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: ceph_cluster_net }
+      cidr: { get_param: ceph_cluster_net_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip:
+
+#############################################################################
+#				CONFIGURATION DU ROUTAGE
+#############################################################################
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external }
+
+  router_interface_hypadmin:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: hypadmin_subnet }
+
+############################################################################
+#				CREATION DU BASTION
+############################################################################
+  bastion:
+    type: OS::Nova::Server
+    properties:
+      name: bastion
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: bastion_port_hypadmin }
+        - port: { get_resource: bastion_port }
+        - port: { get_resource: bastion_port_floating }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+############################################################################
+#				CREATION DES RESSOURCES CONTROLLER
+############################################################################
+  controller1:
+    type: OS::Nova::Server
+    properties:
+      name: controller1
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: controller1_port_hypadmin }
+        - port: { get_resource: controller1_port_ceph_publique }
+        - port: { get_resource: controller1_port_ceph_cluster }
+        - port: { get_resource: controller1_port }
+        - port: { get_resource: controller1_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+  controller2:
+    type: OS::Nova::Server
+    properties:
+      name: controller2
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: controller2_port_hypadmin }
+        - port: { get_resource: controller2_port_ceph_publique }
+        - port: { get_resource: controller2_port_ceph_cluster }
+        - port: { get_resource: controller2_port }
+        - port: { get_resource: controller2_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+  controller3:
+    type: OS::Nova::Server
+    properties:
+      name: controller3
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: controller3_port_hypadmin }
+        - port: { get_resource: controller3_port_ceph_publique }
+        - port: { get_resource: controller3_port_ceph_cluster }
+        - port: { get_resource: controller3_port }
+        - port: { get_resource: controller3_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+############################################################################
+#				CREATION DES RESSOURCES COMPUTE
+############################################################################
+  compute1:
+    type: OS::Nova::Server
+    properties:
+      name: compute1
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: compute1_port_hypadmin }
+        - port: { get_resource: compute1_port_ceph_publique }
+        - port: { get_resource: compute1_port_ceph_cluster }
+        - port: { get_resource: compute1_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+
+  compute2:
+    type: OS::Nova::Server
+    properties:
+      name: compute2
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: compute2_port_hypadmin }
+        - port: { get_resource: compute2_port_ceph_publique }
+        - port: { get_resource: compute2_port_ceph_cluster }
+        - port: { get_resource: compute2_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+  compute3:
+    type: OS::Nova::Server
+    properties:
+      name: compute3
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: compute3_port_hypadmin }
+        - port: { get_resource: compute3_port_ceph_publique }
+        - port: { get_resource: compute3_port_ceph_cluster }
+        - port: { get_resource: compute3_port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
+
+####################################################################################
+#				CONFIGURATION DU BASTION
+####################################################################################
+  bastion_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: public_net }
+      fixed_ips:
+        - subnet: { get_resource: public_subnet }
+          ip_address: 10.0.5.10
+      security_groups:
+         - default
+
+  bastion_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.10
+      security_groups:
+         - default
+
+  bastion_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.10
+      security_groups:
+         - default
+
+  bastion_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external }
+      port_id: { get_resource: bastion_port_hypadmin }
+
+####################################################################################
+#				CONFIGURATION DES CONTROLLERS
+####################################################################################
+  # CONFIGURATION CONTROLLER 1
+  controller1_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: public_net }
+      fixed_ips:
+        - subnet: { get_resource: public_subnet }
+          ip_address: 10.0.5.11
+      security_groups:
+         - default
+
+  controller1_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.11
+      security_groups:
+         - default
+
+  controller1_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.11
+      security_groups:
+         - default
+
+  controller1_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.11
+      security_groups:
+         - default
+
+  controller1_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.11
+      security_groups:
+         - default
+
+  controller1_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.11
+      security_groups:
+         - default
+
+
+  # CONFIGURATION CONTROLLER 2
+  controller2_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: public_net }
+      fixed_ips:
+        - subnet: { get_resource: public_subnet }
+          ip_address: 10.0.5.12
+      security_groups:
+         - default
+
+  controller2_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.12
+      security_groups:
+         - default
+
+  controller2_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.12
+      security_groups:
+         - default
+
+  controller2_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.12
+      security_groups:
+         - default
+
+  controller2_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.12
+      security_groups:
+         - default
+
+  controller2_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.12
+      security_groups:
+         - default
+
+  # CONFIGURATION CONTROLLER 3
+  controller3_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: public_net }
+      fixed_ips:
+        - subnet: { get_resource: public_subnet }
+          ip_address: 10.0.5.13
+      security_groups:
+         - default
+
+  controller3_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.13
+      security_groups:
+         - default
+
+  controller3_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.13
+      security_groups:
+         - default
+
+  controller3_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.13
+      security_groups:
+         - default
+
+  controller3_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.13
+      security_groups:
+         - default
+
+  controller3_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.13
+      security_groups:
+         - default
+
+####################################################################################
+#				CONFIGURATION DES COMPUTES
+####################################################################################
+  # CONFIGURATION COMPUTE 1
+  compute1_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.21
+      security_groups:
+         - default
+
+  compute1_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.21
+      security_groups:
+         - default
+
+  compute1_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.21
+      security_groups:
+         - default
+
+  compute1_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.21
+      security_groups:
+         - default
+
+  compute1_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.21
+      security_groups:
+         - default
+
+  # CONFIGURATION COMPUTE 2
+  compute2_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.22
+      security_groups:
+         - default
+
+  compute2_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.22
+      security_groups:
+         - default
+
+  compute2_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.22
+      security_groups:
+         - default
+
+  compute2_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.22
+      security_groups:
+         - default
+
+  compute2_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.22
+      security_groups:
+         - default
+
+  # CONFIGURATION COMPUTE 3
+  compute3_port_internal:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet: { get_resource: internal_subnet }
+          ip_address: 10.0.7.23
+      security_groups:
+         - default
+
+  compute3_port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: hypadmin_net }
+      fixed_ips:
+        - subnet: { get_resource: hypadmin_subnet }
+          ip_address: 10.0.2.23
+      security_groups:
+         - default
+
+  compute3_port_floating:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: floating_net }
+      fixed_ips:
+        - subnet: { get_resource: floating_subnet }
+          ip_address: 10.0.6.23
+      security_groups:
+         - default
+
+  compute3_port_ceph_publique:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_publique_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_publique_subnet }
+          ip_address: 10.0.3.23
+      security_groups:
+         - default
+
+  compute3_port_ceph_cluster:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: ceph_cluster_net }
+      fixed_ips:
+        - subnet: { get_resource: ceph_cluster_subnet }
+          ip_address: 10.0.4.23
+      security_groups:
+         - default
+
+outputs:
+  bastion_private_ip:
+    description: IP address of bastion in private network
+    value: { get_attr: [ bastion, first_address ] }
+  bastion_public_ip:
+    description: Floating IP address of bastion in public network
+    value: { get_attr: [ bastion_floating_ip, floating_ip_address ] }
