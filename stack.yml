@@ -63,7 +63,7 @@ parameters:
   private_net_name:
     type: string
     description: Name of private network to be created
-    default: pic_private_network
+    default: internal
   private_net_cidr:
     type: string
     description: Private network address (CIDR notation)
@@ -115,7 +115,7 @@ resources:
   hypadmin_network:
     type: OS::Stack::Hypadmin
     properties:
-      hypadmin_network_name: { get_param: hypadmin_network_name }
+      hypadmin_network: { get_param: hypadmin_network_name }
       hypadmin_network_cidr: { get_param: hypadmin_network_cidr }
       hypadmin_network_gateway: { get_param: hypadmin_network_gateway }
 

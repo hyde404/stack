@@ -1,9 +1,10 @@
 ---
-heat_template_version: 2017-09-01
+heat_template_version: 2015-10-15
 
 parameters:
   external:
     type: string
+    default: external
   hypadmin_network_gateway:
     type: string
   hypadmin_network_name:
@@ -37,3 +38,9 @@ resources:
     properties:
       router_id: { get_resource: router }
       subnet_id: { get_resource: hypadmin_subnet }
+
+
+outputs:
+  name:
+    description: The hypadmin network.
+    value: { get_attr: [hypadmin_network, name] }
