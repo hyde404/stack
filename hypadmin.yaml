@@ -1,0 +1,39 @@
+---
+heat_template_version: 2017-09-01
+
+parameters:
+  external:
+    type: string
+  hypadmin_network_gateway:
+    type: string
+  hypadmin_network_name:
+    type: string
+  hypadmin_network_cidr:
+    type: string
+
+resources:
+  hypadmin_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: hypadmin_network_name }
+
+  hypadmin_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: hypadmin_network }
+      cidr: { get_param: hypadmin_network_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip: { get_param: hypadmin_network_gateway }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external }
+
+  router_interface_hypadmin:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: hypadmin_subnet }

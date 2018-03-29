@@ -1,0 +1,163 @@
+heat_template_version: 2017-09-01
+
+description: >
+  HOT template to create a new neutron network plus a router to the public
+  network, and for deploying two servers into the new network. The template also
+  assigns floating IP addresses to each server so they are routable from the
+  public network.
+
+parameters:
+  availability_zone:
+    type: string
+    description: The Availability Zone to create the volume.
+    default: nova
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  volume_size_gd:
+    type: string
+    default: 100
+  volume_size_pt:
+    type: string
+    default: 30
+
+group_name:
+    type: string
+    description: Stack name in Nova / Horizon
+    default: jenkins
+  controller:
+    type: json
+    label: Metadata
+  compute:
+    type: json
+    label: Metadata
+  bastion:
+    type: json
+    label: Metadata
+  controller_group_size:
+    type: number
+    label: controller group size
+    default: 1
+  compute_group_size:
+    type: number
+    label: controller group size
+    default: 1
+  bastion_group_size:
+    type: number
+    label: controller group size
+    default: 1
+
+  private_net_name:
+    type: string
+    description: Name of private network to be created
+    default: pic_private_network
+  private_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 10.0.69.0/29
+  private_net_gateway:
+    type: string
+    description: Private network gateway address
+    default: 10.0.100.1
+  private_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 10.0.100.2
+  private_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 10.0.100.6
+
+#######################################################################
+#					CONFIGURATION DES RESEAUX
+#######################################################################
+resources:
+  stack_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name }
+
+  stack_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: stack_private_net }
+      cidr: { get_param: private_net_cidr }
+      gateway_ip: { get_param: private_net_gateway }
+      dns_nameservers: { get_param: nameservers }
+
+      allocation_pools:
+        - start: { get_param: private_net_pool_start }
+          end: { get_param: private_net_pool_end }
+
+  stack_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_network }
+
+  stack_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: stack_router }
+      subnet_id: { get_resource: stack_private_subnet }
+
+  bastion_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: bastion_group_size }
+      resource_def:
+        type: OS::Stack::Server
+        properties:
+          name: bastion-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: bastion_metadata }
+
+  controller_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: controller_group_size }
+      resource_def:
+        type: OS::Stack::Server
+        properties:
+          name: controller-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: controller_metadata }
+
+  compute_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: compute_group_size }
+      resource_def:
+        type: OS::Stack::Server
+        properties:
+          name: compute-%index%
+          flavor: { get_param: flavor }
+          image_id: { get_param: image_id }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          volume_size: { get_param: volume_size_gd }
+          volume_size: { get_param: volume_size_pt }
+          server_data: { get_param: compute_metadata }
+
+outputs:
+  bastion_private_ip:
+    description: IP address of bastion in private network
+    value: { get_attr: [ bastion, first_address ] }
+  bastion_public_ip:
+    description: Floating IP address of bastion in public network
+    value: { get_attr: [ bastion_floating_ip, floating_ip_address ] }
