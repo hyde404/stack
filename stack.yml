@@ -1,14 +1,19 @@
 ---
-heat_template_version: 2015-10-15
+heat_template_version: 2017-09-01
 
 description: Create a stack for Jenkins masters and slaves.
 
 parameters:
-  flavor:
+  flavor_compute:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used.
-    default: Small_Linux 
+    default: Small_Linux
+  flavor_controller:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used.
+    default: Small_Linux
   image:
     type: string
     label: Image ID
@@ -21,23 +26,16 @@ parameters:
     default: mykey
     constraints:
       - custom_constraint: nova.keypair
-  public_network:
-    type: string
-    description: The network for the VM.
-    default: external
-  nameservers:
-    type: comma_delimited_list
-    description: The DNS the VM is going to use.
-    default: [ '8.8.8.8' ]
-  volume_size:
+
+  volume_size_docker:
     type: number
     description: Size of the attached volume.
-    default: 5
+    default: 50
+  volume_size_ceph:
+    type: number
+    description: Size of the attached volume.
+    default: 30
 
-  group_name:
-    type: string
-    description: Stack name in Nova / Horizon
-    default: group
   compute_metadata:
     type: json
     label: Metadata
@@ -47,43 +45,10 @@ parameters:
   bastion_metadata:
     type: json
     label: Metadata
-  compute_group_size:
-    type: number
-    description: Define the number of master servers in the group.
-    default: 2
-  controller_group_size:
-    type: number
-    description: Define the number of slave servers in the group.
-    default: 2
-  bastion_group_size:
-    type: number
-    description: Define the number of slave servers in the group.
-    default: 1
-
-  private_net_name:
-    type: string
-    description: Name of private network to be created
-    default: internal
-  private_net_cidr:
-    type: string
-    description: Private network address (CIDR notation)
-    default: 10.0.69.0/29
-  private_net_gateway:
-    type: string
-    description: Private network gateway address
-    default: 10.0.69.1
-  private_net_pool_start:
-    type: string
-    description: Start of private network IP address allocation pool
-    default: 10.0.69.2
-  private_net_pool_end:
-    type: string
-    description: End of private network IP address allocation pool
-    default: 10.0.69.6
 
   hypadmin_network_gateway:
     type: string
-    default: 10.0.0.254
+    default: 10.0.2.254
   hypadmin_network_name:
     type: string
     default: hypadmin_network
@@ -91,94 +56,251 @@ parameters:
     type: string
     default: 10.0.2.0/24
 
+  floating_network_name:
+    type: string
+    default: floating_network
+  floating_network_cidr:
+    type: string
+    default: 10.0.6.0/24
+
+  ceph_mgmt_network_name:
+    type: string
+    default: ceph_mgmt_network
+  ceph_mgmt_network_cidr:
+    type: string
+    default: 10.0.3.0/24
+  ceph_cluster_network_name:
+    type: string
+    default: ceph_cluster_network
+  ceph_cluster_network_cidr:
+    type: string
+    default: 10.0.4.0/24
+
+  internal_network_cidr:
+    type: string
+    default: 10.0.7.0/24
+  internal_network_name:
+    type: string
+    default: internal
+
+  public_network_name:
+    type: string
+    default: public
+  public_network_cidr:
+    type: string
+    default: 10.0.5.0/24
+
+  instance_security_name:
+    type: string
+    default: instance_security_openstack
+
   external:
     type: string
+    description: Network externe for floating IP
+    default: external
 
 resources:
-  stack_private_net:
-    type: OS::Neutron::Net
+  instance_security_group:
+    type: OS::Neutron::SecurityGroup
     properties:
-      name: { get_param: private_net_name }
-
-  stack_private_subnet:
-    type: OS::Neutron::Subnet
-    properties:
-      network_id: { get_resource: stack_private_net }
-      cidr: { get_param: private_net_cidr }
-      gateway_ip: { get_param: private_net_gateway }
-      dns_nameservers: { get_param: nameservers }
-
-      allocation_pools:
-        - start: { get_param: private_net_pool_start }
-          end: { get_param: private_net_pool_end }
+      description: Add security group rules for server
+      name: { get_param: instance_security_name }
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: udp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: icmp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: 112
+          remote_ip_prefix: 0.0.0.0/0
 
   hypadmin_network:
-    type: OS::Stack::Hypadmin
+    type: OS::Openstack::Hypadmin
     properties:
-      hypadmin_network: { get_param: hypadmin_network_name }
+      hypadmin_network_name: { get_param: hypadmin_network_name }
       hypadmin_network_cidr: { get_param: hypadmin_network_cidr }
       hypadmin_network_gateway: { get_param: hypadmin_network_gateway }
 
-  stack_router:
-    type: OS::Neutron::Router
+  floating_network:
+    type: OS::Openstack::Floating
     properties:
-      external_gateway_info:
-        network: { get_param: public_network }
+      floating_network_name: { get_param: floating_network_name }
+      floating_network_cidr: { get_param: floating_network_cidr }
+      #floating_network_gateway:
 
-  stack_router_interface:
-    type: OS::Neutron::RouterInterface
+  internal_network:
+    type: OS::Openstack::Internal
     properties:
-      router_id: { get_resource: stack_router }
-      subnet_id: { get_resource: stack_private_subnet }
+      internal_network_name: { get_param: internal_network_name }
+      internal_network_cidr: { get_param: internal_network_cidr }
+      #internal_network_gateway:
 
-  compute_group:
-    type: OS::Heat::ResourceGroup
-    #depends_on: stack_router_interface
+  ceph_cluster_network:
+    type: OS::Openstack::CephCluster
     properties:
-      count: { get_param: compute_group_size }
-      resource_def:
-        type: OS::Stack::Server
-        properties:
-          name: compute-%index%
-          flavor: { get_param: flavor }
-          image: { get_param: image }
-          key_name: { get_param: key_name }
-          private_network: { get_resource: stack_private_net }
-          public_network: { get_param: public_network }
-          volume_size: { get_param: volume_size }
-          server_data: { get_param: compute_metadata }
+      ceph_cluster_network_name: { get_param: ceph_cluster_network_name }
+      ceph_cluster_network_cidr: { get_param: ceph_cluster_network_cidr }
+      #ceph_cluster_network_gateway:
 
-  controller_group:
-    type: OS::Heat::ResourceGroup
-    #depends_on: stack_router_interface
+  ceph_mgmt_network:
+    type: OS::Openstack::CephMgmt
     properties:
-      count: { get_param: controller_group_size }
-      resource_def:
-        type: OS::Stack::Server
-        properties:
-          name: controller-%index%
-          flavor: { get_param: flavor }
-          image: { get_param: image }
-          key_name: { get_param: key_name }
-          private_network: { get_resource: stack_private_net }
-          public_network: { get_param: public_network }
-          volume_size: { get_param: volume_size }
-          server_data: { get_param: controller_metadata }
+      ceph_mgmt_network_name: { get_param: ceph_mgmt_network_name }
+      ceph_mgmt_network_cidr: { get_param: ceph_mgmt_network_cidr }
+      #ceph_mgmt_network_gateway:
+
+  controller_1:
+    type:  OS::Openstack::Controllers
+    properties:
+      name: controller-1
+      flavor: { get_param: flavor_controller }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      public_network: { get_param: public_network_name }
+      floating_network: { get_param: floating_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.2
+      ceph_mgmt_ip: 10.0.3.2
+      ceph_cluster_ip: 10.0.4.2
+      public_ip: 10.0.5.2
+      floating_ip: 10.0.6.2
+      internal_ip: 10.0.7.2
+      public_vip: 10.0.5.1
+      internal_vip: 10.0.7.1
+
+  controller_2:
+    type:  OS::Openstack::Controllers
+    properties:
+      name: controller-2
+      flavor: { get_param: flavor_controller }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      public_network: { get_param: public_network_name }
+      floating_network: { get_param: floating_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.3
+      ceph_mgmt_ip: 10.0.3.3
+      ceph_cluster_ip: 10.0.4.3
+      public_ip: 10.0.5.3
+      floating_ip: 10.0.6.3
+      internal_ip: 10.0.7.3
+      public_vip: 10.0.5.1
+      internal_vip: 10.0.7.1
+
+  controller_3:
+    type:  OS::Openstack::Controllers
+    properties:
+      name: controller-3
+      flavor: { get_param: flavor_controller }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      public_network: { get_param: public_network_name }
+      floating_network: { get_param: floating_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.4
+      ceph_mgmt_ip: 10.0.3.4
+      ceph_cluster_ip: 10.0.4.4
+      public_ip: 10.0.5.4
+      floating_ip: 10.0.6.4
+      internal_ip: 10.0.7.4
+      public_vip: 10.0.5.1
+      internal_vip: 10.0.7.1
+
+  compute_1:
+    type: OS::Openstack::Compute
+    properties:
+      name: compute-1
+      flavor: { get_param: flavor_compute }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      volume_size_ceph: { get_param: volume_size_ceph }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.12
+      ceph_mgmt_ip: 10.0.3.12
+      ceph_cluster_ip: 10.0.4.12
+      internal_ip: 10.0.7.12
+      internal_vip: 10.0.7.1
+
+  compute_2:
+    type: OS::Openstack::Compute
+    properties:
+      name: compute-2
+      flavor: { get_param: flavor_compute }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      volume_size_ceph: { get_param: volume_size_ceph }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.13
+      ceph_mgmt_ip: 10.0.3.13
+      ceph_cluster_ip: 10.0.4.13
+      internal_ip: 10.0.7.13
+      internal_vip: 10.0.7.1
+
+  compute_3:
+    type: OS::Openstack::Compute
+    properties:
+      name: compute-3
+      flavor: { get_param: flavor_compute }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      volume_size_ceph: { get_param: volume_size_ceph }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      ceph_mgmt_network: { get_param: ceph_mgmt_network_name }
+      ceph_cluster_network: { get_param: ceph_cluster_network_name }
+      internal_network: { get_param: internal_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.14
+      ceph_mgmt_ip: 10.0.3.14
+      ceph_cluster_ip: 10.0.4.14
+      internal_ip: 10.0.7.14
+      internal_vip: 10.0.7.1
 
   bastion:
-    type: OS::Heat::ResourceGroup
-    #depends_on: stack_router_interface
+    type: OS::Openstack::Bastion
     properties:
-      count: { get_param: bastion_group_size }
-      resource_def:
-        type: OS::Stack::Server
-        properties:
-          name: bastion-%index%
-          flavor: { get_param: flavor }
-          image: { get_param: image }
-          key_name: { get_param: key_name }
-          private_network: { get_resource: stack_private_net }
-          hypadmin_network: { get_resource: hypadmin_network }
-          public_network: { get_param: public_network }
-          volume_size: { get_param: volume_size }
-          server_data: { get_param: bastion_metadata }
+      name: bastion
+      flavor: { get_param: flavor_compute }
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      volume_size_docker: { get_param: volume_size_docker }
+      server_data: { get_param: controller_metadata }
+      hypadmin_network: { get_param: hypadmin_network_name }
+      floating_network: { get_param: floating_network_name }
+      instance_security_group: { get_param: instance_security_name }
+      hypadmin_ip: 10.0.2.100
+      public_ip: 10.0.5.100
+      floating_ip: 10.0.6.100
+      public_vip: 10.0.5.1

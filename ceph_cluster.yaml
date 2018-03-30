@@ -1,0 +1,23 @@
+---
+heat_template_version: 2017-09-01
+
+parameters:
+  ceph_cluster_network_name:
+    type: string
+  ceph_cluster_network_cidr:
+    type: string
+
+resources:
+  ceph_cluster_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: ceph_cluster_network_name }
+
+  ceph_cluster_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: ceph_cluster_network }
+      cidr: { get_param: ceph_cluster_network_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip:

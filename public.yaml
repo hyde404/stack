@@ -1,0 +1,26 @@
+---
+heat_template_version: 2017-09-01
+
+parameters:
+  external:
+    type: string
+    default: external
+  public_network_name:
+    type: string
+  public_network_cidr:
+    type: string
+
+resources:
+  hypadmin_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: true
+      name: { get_param: public_network_name }
+
+  hypadmin_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: public_network }
+      cidr: { get_param: public_network_cidr }
+      dns_nameservers: [ "172.16.6.254" ]
+      gateway_ip: { get_param: public_network_gateway }

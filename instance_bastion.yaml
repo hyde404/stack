@@ -33,56 +33,92 @@ parameters:
     type: string
     label: Instance name
     description: The compute instance name
-  private_network:
+
+  hypadmin_network:
     type: string
-    description: The private network for the VM.
   public_network:
     type: string
     description: The public network for the VM.
-  volume_size:
+    default: public_network
+  floating_network:
+    type: string
+
+  external:
+    type: string
+    default: external
+
+  hypadmin_ip:
+    type: string
+    constraints:
+      - custom_constraint: ip_addr
+  public_ip:
+    type: string
+    constraints:
+      - custom_constraint: ip_addr
+  floating_ip:
+    type: string
+    constraints:
+      - custom_constraint: ip_addr
+
+  public_vip:
+    type: string
+    constraints:
+      - custom_constraint: ip_addr
+
+  instance_security_group:
+    type: string
+
+  volume_size_docker:
     type: string
     description: Size of the attached volume.
     default: 5
 
-resources:
-  instance_security_group:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      description: Add security group rules for server
-      name: security-group-custom
-      rules:
-        - protocol: tcp
-          remote_ip_prefix: 0.0.0.0/0
-        - protocol: udp
-          remote_ip_prefix: 0.0.0.0/0
-        - protocol: icmp
-          remote_ip_prefix: 0.0.0.0/0
 
-  instance_port:
+resources:
+  port_public:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_param: private_network }
-      security_groups: [{ get_resource: instance_security_group }]
-      ip: get param ip_mag
+      network: { get_param: public_network }
+      security_groups: { get_param: instance_security_group }
+      fixed_ips:
+        - ip_adress: { get_param: public_ip }
+      allowed_address_pairs:
+        - ip_adress: { get_param: public_vip }
 
-  instance_floating_ip:
+  port_hypadmin:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: hypadmin_network }
+      security_groups: { get_param: instance_security_group }
+      fixed_ips:
+        - ip_adress: { get_param: hypadmin_ip }
+
+  port_floating:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: floating_network }
+      security_groups: { get_param: instance_security_group }
+      fixed_ips:
+        - ip_adress: { get_param: floating_ip }
+
+  port_floating_ip:
     type: OS::Neutron::FloatingIP
     properties:
-      floating_network_id: { get_param: public_network }
+      floating_network_id: { get_param: external }
 
   instance_associate_floating_ip:
     type: OS::Neutron::FloatingIPAssociation
     properties:
-      floatingip_id: { get_resource: instance_floating_ip }
-      port_id: { get_resource: instance_port }
+      floatingip_id: { get_resource: port_floating_ip }
+      port_id: { get_resource: port_public }
 
-  instance_volume:
+  volume_docker:
     type: OS::Cinder::Volume
     properties:
       availability_zone: { get_param: availability_zone }
-      size: { get_param: volume_size }
+      size: { get_param: volume_size_docker }
 
-  instance_compute:
+  instance_bastion:
     type: OS::Nova::Server
     properties:
       image:    { get_param: image }
@@ -91,19 +127,21 @@ resources:
       metadata: { get_param: server_data }
       name:     { get_param: name }
       networks:
-        - port: { get_resource: instance_port }
+        - port: { get_resource: port_hypadmin }
+        - port: { get_resource: port_public }
+        - port: { get_resource: port_floating }
 
   instance_volume_attach:
     type: OS::Cinder::VolumeAttachment
     properties:
-      instance_uuid: { get_resource: instance_compute }
-      volume_id: { get_resource: instance_volume }
+      instance_uuid: { get_resource: instance_bastion }
+      volume_id: { get_resource: volume_docker }
       mountpoint: /dev/sdb
 
 outputs:
   private_ip:
     description: IP address of instance in private network
-    value: { get_attr: [ instance_compute, first_address ] }
+    value: { get_attr: [ instance_bastion, first_address ] }
   #public_ip:
   #  description: Floating IP address of instance in public network
   #  value: { get_attr: [ instance_floating_ip, floating_ip_address ] }
