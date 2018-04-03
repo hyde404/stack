@@ -17,6 +17,7 @@ resources:
   floating_subnet:
     type: OS::Neutron::Subnet
     properties:
+      enable_dhcp: false
       network_id: { get_resource: floating_network }
       cidr: { get_param: floating_network_cidr }
       dns_nameservers: [ "172.16.6.254" ]

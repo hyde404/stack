@@ -17,6 +17,7 @@ resources:
   internal_subnet:
     type: OS::Neutron::Subnet
     properties:
+      enable_dhcp: false
       network_id: { get_resource: internal_network }
       cidr: { get_param: internal_network_cidr }
       dns_nameservers: [ "172.16.6.254" ]

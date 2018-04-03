@@ -11,16 +11,17 @@ parameters:
     type: string
 
 resources:
-  hypadmin_network:
+  public_network:
     type: OS::Neutron::Net
     properties:
       admin_state_up: true
       name: { get_param: public_network_name }
 
-  hypadmin_subnet:
+  public_subnet:
     type: OS::Neutron::Subnet
     properties:
+      enable_dhcp: false
       network_id: { get_resource: public_network }
       cidr: { get_param: public_network_cidr }
       dns_nameservers: [ "172.16.6.254" ]
-      gateway_ip: { get_param: public_network_gateway }
+      gateway_ip:

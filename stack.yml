@@ -85,10 +85,17 @@ parameters:
 
   public_network_name:
     type: string
-    default: public
+    default: public_network
   public_network_cidr:
     type: string
     default: 10.0.5.0/24
+
+  internal_vip:
+    type: string
+    default: 10.0.7.1
+  public_vip:
+    type: string
+    default: 10.0.5.1
 
   instance_security_name:
     type: string
@@ -100,20 +107,19 @@ parameters:
     default: external
 
 resources:
-  instance_security_group:
-    type: OS::Neutron::SecurityGroup
+  port_vip_public:
+    type: OS::Neutron::Port
     properties:
-      description: Add security group rules for server
-      name: { get_param: instance_security_name }
-      rules:
-        - protocol: tcp
-          remote_ip_prefix: 0.0.0.0/0
-        - protocol: udp
-          remote_ip_prefix: 0.0.0.0/0
-        - protocol: icmp
-          remote_ip_prefix: 0.0.0.0/0
-        - protocol: 112
-          remote_ip_prefix: 0.0.0.0/0
+      network: { get_param: public_network_name }
+      fixed_ips:
+        - ip_address: { get_param: public_vip }
+
+  port_vip_internal:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      fixed_ips:
+        - ip_address: { get_param: internal_vip }
 
   hypadmin_network:
     type: OS::Openstack::Hypadmin
@@ -121,6 +127,12 @@ resources:
       hypadmin_network_name: { get_param: hypadmin_network_name }
       hypadmin_network_cidr: { get_param: hypadmin_network_cidr }
       hypadmin_network_gateway: { get_param: hypadmin_network_gateway }
+
+  public_network:
+    type: OS::Openstack::Public
+    properties:
+      public_network_name: { get_param: public_network_name }
+      public_network_cidr: { get_param: public_network_cidr }
 
   floating_network:
     type: OS::Openstack::Floating
@@ -150,8 +162,24 @@ resources:
       ceph_mgmt_network_cidr: { get_param: ceph_mgmt_network_cidr }
       #ceph_mgmt_network_gateway:
 
+  instance_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: { get_param: instance_security_name }
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: udp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: icmp
+          remote_ip_prefix: 0.0.0.0/0
+        - protocol: 112
+          remote_ip_prefix: 0.0.0.0/0
+
   controller_1:
     type:  OS::Openstack::Controllers
+    depends_on: [ public_network, ceph_mgmt_network, ceph_cluster_network, internal_network, floating_network, hypadmin_network, instance_security_group ]
     properties:
       name: controller-1
       flavor: { get_param: flavor_controller }
@@ -174,9 +202,12 @@ resources:
       internal_ip: 10.0.7.2
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
+      #public_vip: { get_ressource: port_vip_public }
+      #internal_vip: { get_ressource: port_vip_internal } 
 
   controller_2:
     type:  OS::Openstack::Controllers
+    depends_on: [ public_network, ceph_mgmt_network, ceph_cluster_network, internal_network, floating_network, hypadmin_network, instance_security_group ]
     properties:
       name: controller-2
       flavor: { get_param: flavor_controller }
@@ -197,11 +228,14 @@ resources:
       public_ip: 10.0.5.3
       floating_ip: 10.0.6.3
       internal_ip: 10.0.7.3
+      #public_vip: { get_ressource: port_vip_public }
+      #internal_vip: { get_ressource: port_vip_internal } 
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
 
   controller_3:
     type:  OS::Openstack::Controllers
+    depends_on: [ public_network, ceph_mgmt_network, ceph_cluster_network, internal_network, floating_network, hypadmin_network, instance_security_group ]
     properties:
       name: controller-3
       flavor: { get_param: flavor_controller }
@@ -222,11 +256,14 @@ resources:
       public_ip: 10.0.5.4
       floating_ip: 10.0.6.4
       internal_ip: 10.0.7.4
+      #public_vip: { get_ressource: port_vip_public }
+      #internal_vip: { get_ressource: port_vip_internal } 
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
 
   compute_1:
     type: OS::Openstack::Compute
+    depends_on: [ ceph_mgmt_network, ceph_cluster_network, internal_network, hypadmin_network, instance_security_group ]
     properties:
       name: compute-1
       flavor: { get_param: flavor_compute }
@@ -244,10 +281,10 @@ resources:
       ceph_mgmt_ip: 10.0.3.12
       ceph_cluster_ip: 10.0.4.12
       internal_ip: 10.0.7.12
-      internal_vip: 10.0.7.1
 
   compute_2:
     type: OS::Openstack::Compute
+    depends_on: [ ceph_mgmt_network, ceph_cluster_network, internal_network, hypadmin_network, instance_security_group ]
     properties:
       name: compute-2
       flavor: { get_param: flavor_compute }
@@ -265,10 +302,10 @@ resources:
       ceph_mgmt_ip: 10.0.3.13
       ceph_cluster_ip: 10.0.4.13
       internal_ip: 10.0.7.13
-      internal_vip: 10.0.7.1
 
   compute_3:
     type: OS::Openstack::Compute
+    depends_on: [ ceph_mgmt_network, ceph_cluster_network, internal_network, hypadmin_network, instance_security_group ]
     properties:
       name: compute-3
       flavor: { get_param: flavor_compute }
@@ -286,21 +323,21 @@ resources:
       ceph_mgmt_ip: 10.0.3.14
       ceph_cluster_ip: 10.0.4.14
       internal_ip: 10.0.7.14
-      internal_vip: 10.0.7.1
 
   bastion:
     type: OS::Openstack::Bastion
+    depends_on: [ public_network, floating_network, hypadmin_network, instance_security_group ]
     properties:
       name: bastion
       flavor: { get_param: flavor_compute }
       image: { get_param: image }
       key_name: { get_param: key_name }
       volume_size_docker: { get_param: volume_size_docker }
-      server_data: { get_param: controller_metadata }
+      server_data: { get_param: bastion_metadata }
       hypadmin_network: { get_param: hypadmin_network_name }
       floating_network: { get_param: floating_network_name }
+      public_network: { get_param: public_network_name }
       instance_security_group: { get_param: instance_security_name }
       hypadmin_ip: 10.0.2.100
       public_ip: 10.0.5.100
       floating_ip: 10.0.6.100
-      public_vip: 10.0.5.1
