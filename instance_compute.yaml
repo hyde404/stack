@@ -134,6 +134,16 @@ resources:
         - port: { get_resource: port_ceph_mgmt }
         - port: { get_resource: port_ceph_cluster }
         - port: { get_resource: port_internal }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        nb=$(ifconfig -a | grep -E eth[1-9]| sed 's/[ \t].*//;/^\(lo\|\)$/d' | wc -l | sed 's/ *//g')
+        for (( i=1; i<=$nb; i++ )); do
+          echo "DEVICE=eth$i
+          BOOTPROTO=dhcp
+          ONBOOT=yes" > /etc/sysconfig/network-scripts/ifcfg-eth$i
+          ifup eth$i
+        done
 
   instance_volume_attach_main:
     type: OS::Cinder::VolumeAttachment

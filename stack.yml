@@ -7,18 +7,20 @@ parameters:
   flavor_compute:
     type: string
     label: Instance Type
-    description: Type of instance (flavor) to be used.
-    default: Small_Linux
+    default: VeryLarge_Linux
   flavor_controller:
     type: string
     label: Instance Type
-    description: Type of instance (flavor) to be used.
+    default: VeryLarge_Linux
+  flavor_bastion:
+    type: string
+    label: Instance Type
     default: Small_Linux
   image:
     type: string
     label: Image ID
     description: Image to be used for compute instance.
-    default: cirros-0.3.4-x86_64-disk
+    default: CentOS-7.4-N1
   key_name:
     type: string
     label: Key Name
@@ -81,8 +83,11 @@ parameters:
     default: 10.0.7.0/24
   internal_network_name:
     type: string
-    default: internal
+    default: internal_network
 
+  public_network_gateway:
+    type: string
+    default: 10.0.5.254
   public_network_name:
     type: string
     default: public_network
@@ -107,20 +112,6 @@ parameters:
     default: external
 
 resources:
-  port_vip_public:
-    type: OS::Neutron::Port
-    properties:
-      network: { get_param: public_network_name }
-      fixed_ips:
-        - ip_address: { get_param: public_vip }
-
-  port_vip_internal:
-    type: OS::Neutron::Port
-    properties:
-      network: { get_param: internal_network_name }
-      fixed_ips:
-        - ip_address: { get_param: internal_vip }
-
   hypadmin_network:
     type: OS::Openstack::Hypadmin
     properties:
@@ -133,34 +124,31 @@ resources:
     properties:
       public_network_name: { get_param: public_network_name }
       public_network_cidr: { get_param: public_network_cidr }
+      public_network_gateway: { get_param: public_network_gateway }
 
   floating_network:
     type: OS::Openstack::Floating
     properties:
       floating_network_name: { get_param: floating_network_name }
       floating_network_cidr: { get_param: floating_network_cidr }
-      #floating_network_gateway:
 
   internal_network:
     type: OS::Openstack::Internal
     properties:
       internal_network_name: { get_param: internal_network_name }
       internal_network_cidr: { get_param: internal_network_cidr }
-      #internal_network_gateway:
 
   ceph_cluster_network:
     type: OS::Openstack::CephCluster
     properties:
       ceph_cluster_network_name: { get_param: ceph_cluster_network_name }
       ceph_cluster_network_cidr: { get_param: ceph_cluster_network_cidr }
-      #ceph_cluster_network_gateway:
 
   ceph_mgmt_network:
     type: OS::Openstack::CephMgmt
     properties:
       ceph_mgmt_network_name: { get_param: ceph_mgmt_network_name }
       ceph_mgmt_network_cidr: { get_param: ceph_mgmt_network_cidr }
-      #ceph_mgmt_network_gateway:
 
   instance_security_group:
     type: OS::Neutron::SecurityGroup
@@ -202,8 +190,6 @@ resources:
       internal_ip: 10.0.7.2
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
-      #public_vip: { get_ressource: port_vip_public }
-      #internal_vip: { get_ressource: port_vip_internal } 
 
   controller_2:
     type:  OS::Openstack::Controllers
@@ -228,8 +214,6 @@ resources:
       public_ip: 10.0.5.3
       floating_ip: 10.0.6.3
       internal_ip: 10.0.7.3
-      #public_vip: { get_ressource: port_vip_public }
-      #internal_vip: { get_ressource: port_vip_internal } 
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
 
@@ -256,8 +240,6 @@ resources:
       public_ip: 10.0.5.4
       floating_ip: 10.0.6.4
       internal_ip: 10.0.7.4
-      #public_vip: { get_ressource: port_vip_public }
-      #internal_vip: { get_ressource: port_vip_internal } 
       public_vip: 10.0.5.1
       internal_vip: 10.0.7.1
 
@@ -329,14 +311,14 @@ resources:
     depends_on: [ public_network, floating_network, hypadmin_network, instance_security_group ]
     properties:
       name: bastion
-      flavor: { get_param: flavor_compute }
+      flavor: { get_param: flavor_bastion }
       image: { get_param: image }
       key_name: { get_param: key_name }
       volume_size_docker: { get_param: volume_size_docker }
       server_data: { get_param: bastion_metadata }
       hypadmin_network: { get_param: hypadmin_network_name }
-      floating_network: { get_param: floating_network_name }
       public_network: { get_param: public_network_name }
+      floating_network: { get_param: floating_network_name }
       instance_security_group: { get_param: instance_security_name }
       hypadmin_ip: 10.0.2.100
       public_ip: 10.0.5.100

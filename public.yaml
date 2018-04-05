@@ -9,6 +9,11 @@ parameters:
     type: string
   public_network_cidr:
     type: string
+  public_network_gateway:
+    type: string
+  public_vip:
+    type: string
+    default: 10.0.5.1
 
 resources:
   public_network:
@@ -24,4 +29,25 @@ resources:
       network_id: { get_resource: public_network }
       cidr: { get_param: public_network_cidr }
       dns_nameservers: [ "172.16.6.254" ]
-      gateway_ip:
+      gateway_ip: { get_param: public_network_gateway }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external }
+
+  router_interface_public:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: public_subnet }
+
+  port_vip_public:
+      type: OS::Neutron::Port
+      depends_on: public_network
+      properties:
+        network: { get_resource: public_network }
+        fixed_ips:
+          - ip_address: { get_param: public_vip }
+

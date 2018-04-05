@@ -6,6 +6,9 @@ parameters:
     type: string
   internal_network_cidr:
     type: string
+  internal_vip:
+    type: string
+    default: 10.0.7.1
 
 resources:
   internal_network:
@@ -22,3 +25,12 @@ resources:
       cidr: { get_param: internal_network_cidr }
       dns_nameservers: [ "172.16.6.254" ]
       gateway_ip:
+  
+  port_vip_internal:
+      type: OS::Neutron::Port
+      depends_on: internal_network
+      properties:
+        network: { get_resource: internal_network }
+        fixed_ips:
+          - ip_address: { get_param: internal_vip }
+
