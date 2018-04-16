@@ -2,10 +2,10 @@
 heat_template_version: 2017-09-01
 
 description: >
-  This template will create a stack of bastion for Idatha
+  This template will create a stack of front for Idatha
 
 parameters:
-  flavor_bastion:
+  flavor_front:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used.
@@ -23,6 +23,10 @@ parameters:
     description: Name of key-pair to be used for compute instance.
     constraints:
       - custom_constraint: nova.keypair
+  server_data:
+    type: json
+    label: Metadata
+    description: Metadata for the VM.
   name:
     type: string
     label: Instance name
@@ -32,16 +36,15 @@ parameters:
     description: The private network for the VM.
     constraints:
       - custom_constraint: neutron.network
-  internal_network:
-    type: string
-    description: The private network for the VM.
-    constraints:
-      - custom_constraint: neutron.network
   public_network:
     type: string
     description: The public network for the VM.
     constraints:
       - custom_constraint: neutron.network
+
+  volume_size:
+    type: string
+    description: Size of the attached volume.
 
   project:
     type: string
@@ -57,25 +60,32 @@ resources:
     type: OS::Neutron::SecurityGroup
     properties:
       description: Add security group rules for server
-      name: security-group-bastion
-      rules: [ {"protocol": tcp,
-                "remote_ip_prefix": 0.0.0.0/0,
-                "port_range_min": 22,
-                "port_range_max": 22,
-                "ethertype": IPv4},
-               {"protocol": icmp,
-                "remote_ip_prefix": 0.0.0.0/0,
-                "ethertype": IPv4} ]
-
-  instance_security_internal_group:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      description: Add security group rules for server
-      name: security-group-kafka-internal
+      name: security-group-front
       rules: [{"protocol": tcp,
                 "remote_ip_prefix": 0.0.0.0/0,
                 "port_range_min": 22,
                 "port_range_max": 22,
+                "ethertype": IPv4},
+               {"protocol": tcp,
+                #grafana 
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 3000,
+                "port_range_max": 3000,
+                "ethertype": IPv4},
+               {"protocol": tcp,
+                #https 
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 443,
+                "port_range_max": 443,
+                "ethertype": IPv4},
+               {"protocol": tcp,
+                #front
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 3010,
+                "port_range_max": 3010,
+                "ethertype": IPv4},
+              {"protocol": icmp,
+                "remote_ip_prefix": 0.0.0.0/0,
                 "ethertype": IPv4}]
 
   instance_port:
@@ -83,46 +93,34 @@ resources:
     properties:
       network_id: { get_param: private_network }
       security_groups: [{ get_resource: instance_security_group }]
-
-  instance_internal_port:
-    type: OS::Neutron::Port
-    properties:
-      network_id: { get_param: internal_network }
-      security_groups: [{ get_resource: instance_security_internal_group }]
-
-  instance_floating_ip:
-    type: OS::Neutron::FloatingIP
-    properties:
-      floating_network_id: { get_param: public_network }
-
-  instance_associate_floating_ip:
-    type: OS::Neutron::FloatingIPAssociation
-    properties:
-      floatingip_id: { get_resource: instance_floating_ip }
-      port_id: { get_resource: instance_port }
-
+    
   instance_compute:
     type: OS::Nova::Server
     properties:
       image:    { get_param: image_name }
-      flavor:   { get_param: flavor_bastion }
+      flavor:   { get_param: flavor_front }
       key_name: { get_param: key_name }
+      metadata: { get_param: server_data }
       name:     { get_param: name }
       networks:
         - port: { get_resource: instance_port }
-        - port: { get_resource: instance_internal_port }
       user_data_format: RAW
       user_data: |
         #!/bin/sh
-        yum install epel-release python-devel python-pip gcc ansible -y
-        pip install --upgrade pip
-        pip install virtualenv
-        virtualenv /root/venv
-        pip install python-openstackclient
-        pip install python-heatclient
-        pip install shade
-        wget https://raw.githubusercontent.com/ansible/ansible/devel/contrib/inventory/openstack.py -P /etc/ansible/
-        chmod +x /etc/ansible/openstack.py
+        pvcreate /dev/vdb
+        vgcreate -s 32 data_vg /dev/vdb
+
+  instance_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: volume_size }
+
+  instance_volume_attach:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: { get_resource: instance_compute }
+      volume_id: { get_resource: instance_volume }
+      mountpoint: /dev/sdb
 
   instance_dns_record:
     type: OS::Designate::RecordSet
@@ -133,7 +131,7 @@ resources:
           params:
             "$project": { str_split: ['_', { get_param: project }, 0]}
             "$domain": { get_param: domain }
-      records: [{ get_attr: [instance_floating_ip, floating_ip_address] }]
+      records: [{ get_attr: [instance_compute, first_address] }]
       name:
         str_replace:
           template: $name.$project.$domain.
@@ -147,7 +145,4 @@ outputs:
   private_ip:
     description: IP address of instance in private network
     value: { get_attr: [ instance_compute, first_address ] }
-  public_ip:
-    description: Floating IP address of instance in public network
-    value: { get_attr: [ instance_floating_ip, floating_ip_address ] }
 

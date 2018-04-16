@@ -1,0 +1,427 @@
+---
+heat_template_version: 2017-09-01
+
+description: Create a stack for Grafana.
+
+parameters:
+  flavor_kafka:
+    type: string
+    label: Instance Type
+    description: Type of instance kafka (flavor) to be used.
+    default: Standard_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  flavor_elasticsearch:
+    type: string
+    label: Instance Type
+    description: Type of instance elasticsearch (flavor) to be used.
+    default: HighCPU_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  flavor_connectix:
+    type: string
+    label: Instance Type
+    description: Type of instance connectix (flavor) to be used.
+    default: HighCPU_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  flavor_haproxy:
+    type: string
+    label: Instance Type
+    description: Type of instance connectix (flavor) to be used.
+    default: Tiny_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  flavor_front:
+    type: string
+    label: Instance Type
+    description: Type of instance front (flavor) to be used.
+    default: Tiny_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+  flavor_bastion:
+    type: string
+    label: Instance Type
+    description: Type of instance bastion (flavor) to be used.
+    default: Small_Linux
+    constraints:
+      - custom_constraint: nova.flavor
+
+  image_name:
+    type: string
+    label: Image ID
+    description: Image to be used for compute instance.
+    constraints:
+      - custom_constraint: glance.image
+  key_name:
+    type: string
+    label: Key Name
+    description: Name of key-pair to be used for compute instance.
+    default: admsrv
+    constraints:
+      - custom_constraint: nova.keypair
+  public_network:
+    type: string
+    description: The network for the VM.
+    default: external
+    constraints:
+      - custom_constraint: neutron.network
+  nameservers:
+    type: comma_delimited_list
+    description: The DNS the VM is going to use.
+    default: [ '172.16.6.254' ]
+
+  kafka_master_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the Kafka VMs.
+  kafka_slave_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the Kafka VMs.
+  elasticsearch_master_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the elasticsearch VMs.
+  elasticsearch_slave_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the elasticsearch VMs.
+  connectix_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the connectix VMs.
+  haproxy_master_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the haproxy VMs.
+  haproxy_slave_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the haproxy VMs.
+  front_metadata:
+    type: json
+    label: Metadata
+    description: Metadata for the front VMs.
+
+  kafka_master_group_size:
+    type: number
+    label: Kafka group size
+    description: Define the number of kafka servers in the group.
+    default: 1
+  kafka_slave_group_size:
+    type: number
+    label: Kafka group size
+    description: Define the number of kafka servers in the group.
+    default: 1
+  elasticsearch_master_group_size:
+    type: number
+    label: elasticsearch group size
+    description: Define the number of elasticsearch servers in the group.
+    default: 1
+  elasticsearch_slave_group_size:
+    type: number
+    label: elasticsearch group size
+    description: Define the number of elasticsearch servers in the group.
+    default: 1
+  connectix_group_size:
+    type: number
+    label: connectix group size
+    description: Define the number of connectix servers in the group.
+    default: 1
+  haproxy_master_group_size:
+    type: number
+    label: haproxy group size
+    description: Define the number of haproxy servers in the group.
+    default: 1
+  haproxy_slave_group_size:
+    type: number
+    label: haproxy group size
+    description: Define the number of haproxy servers in the group.
+    default: 1
+  front_group_size:
+    type: number
+    label: front group size
+    description: Define the number of front servers in the group.
+    default: 1
+
+  private_net_name:
+    type: string
+    description: Name of private network to be created
+    default: private_network
+  private_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 10.0.90.0/24
+  private_net_gateway:
+    type: string
+    description: Private network gateway address
+    default: 10.0.90.1
+  private_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 10.0.90.2
+  private_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 10.0.90.250
+
+  internal_net_name:
+    type: string
+    description: Name of private network to be created
+    default: internal_network
+  internal_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 10.0.100.0/24
+  internal_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 10.0.100.2
+  internal_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 10.0.100.250
+
+  volume_size_kafka:
+    type: number
+    description: Size of the attached volume for kafka.
+    default: 250
+  volume_size_elasticsearch:
+    type: number
+    description: Size of the attached volume for elasticsearch.
+    default: 1000
+  volume_size:
+    type: number
+    description: Size of the attached volume to the other.
+    default: 10
+
+  project:
+    type: string
+    label: Project Name
+    default: idatha
+    description: The openstack project the instance is associated with
+  domain:
+    type: string
+    label: Domain name
+    description: Domain Name
+    default: vms.dune
+
+resources:
+  stack_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name }
+
+  stack_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: stack_private_net }
+      cidr: { get_param: private_net_cidr }
+      gateway_ip: { get_param: private_net_gateway }
+      dns_nameservers: { get_param: nameservers }
+
+      allocation_pools:
+        - start: { get_param: private_net_pool_start }
+          end: { get_param: private_net_pool_end }
+
+  stack_internal_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: internal_net_name }
+
+  stack_internal_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: stack_internal_net }
+      cidr: { get_param: internal_net_cidr }
+      gateway_ip:
+      dns_nameservers: { get_param: nameservers }
+
+  stack_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_network }
+
+  stack_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: stack_router }
+      subnet_id: { get_resource: stack_private_subnet }
+
+  kafka_master_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: kafka_master_group_size }
+      resource_def:
+        type: OS::Kafka::Server
+        properties:
+          name: brok-master-0%index%
+          flavor_kafka: { get_param: flavor_kafka }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          internal_network: { get_resource: stack_internal_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: kafka_master_metadata }
+          volume_size: { get_param: volume_size_kafka }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  kafka_slave_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: kafka_slave_group_size }
+      resource_def:
+        type: OS::Kafka::Server
+        properties:
+          name: brok-slave-0%index%
+          flavor_kafka: { get_param: flavor_kafka }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          internal_network: { get_resource: stack_internal_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: kafka_slave_metadata }
+          volume_size: { get_param: volume_size_kafka }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  elasticsearch_master_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: elasticsearch_master_group_size }
+      resource_def:
+        type: OS::Elasticsearch::Server
+        properties:
+          name: data-master-0%index%
+          flavor_elasticsearch: { get_param: flavor_elasticsearch }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          internal_network: { get_resource: stack_internal_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: elasticsearch_master_metadata }
+          volume_size: { get_param: volume_size_elasticsearch }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+
+  elasticsearch_slave_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: elasticsearch_slave_group_size }
+      resource_def:
+        type: OS::Elasticsearch::Server
+        properties:
+          name: data-slave-0%index%
+          flavor_elasticsearch: { get_param: flavor_elasticsearch }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          internal_network: { get_resource: stack_internal_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: elasticsearch_slave_metadata }
+          volume_size: { get_param: volume_size_elasticsearch }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  connectix_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: connectix_group_size }
+      resource_def:
+        type: OS::Connectix::Server
+        properties:
+          name: cons0%index%
+          flavor_connectix: { get_param: flavor_connectix }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: connectix_metadata }
+          volume_size: { get_param: volume_size }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  
+  front_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: front_group_size }
+      resource_def:
+        type: OS::Front::Server
+        properties:
+          name: front%index%
+          flavor_front: { get_param: flavor_front }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: front_metadata }
+          volume_size: { get_param: volume_size }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+
+  haproxy_master_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: haproxy_master_group_size }
+      resource_def:
+        type: OS::Haproxy::Server
+        properties:
+          name: load-master-0%index%
+          flavor_haproxy: { get_param: flavor_haproxy }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: haproxy_master_metadata }
+          volume_size: { get_param: volume_size }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+
+  haproxy_slave_server:
+    type: OS::Heat::ResourceGroup
+    depends_on: stack_router_interface
+    properties:
+      count: { get_param: haproxy_slave_group_size }
+      resource_def:
+        type: OS::Haproxy::Server
+        properties:
+          name: load-slave-0%index%
+          flavor_haproxy: { get_param: flavor_haproxy }
+          image_name: { get_param: image_name }
+          key_name: { get_param: key_name }
+          private_network: { get_resource: stack_private_net }
+          public_network: { get_param: public_network }
+          server_data: { get_param: haproxy_slave_metadata }
+          volume_size: { get_param: volume_size }
+          project: { get_param: project }
+          domain: { get_param: domain }
+
+  bastion_server:
+    depends_on: stack_router_interface
+    type: OS::Bastion::Server
+    properties:
+      name: bastion
+      flavor_bastion: { get_param: flavor_bastion }
+      image_name: { get_param: image_name }
+      key_name: { get_param: key_name }
+      internal_network: { get_resource: stack_internal_net }
+      private_network: { get_resource: stack_private_net }
+      public_network: { get_param: public_network }
+      project: { get_param: project }
+      domain: { get_param: domain }
+
+
